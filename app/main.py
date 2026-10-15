@@ -703,7 +703,11 @@ def late_leaderboard(
 
     pipeline = [
         {"$match": {"date": {"$gte": ms, "$lte": me}}},
-        {"$group": {"_id": "$emp_code", "total_late_minutes": {"$sum": "$late_minutes"}}},
+        {"$group": {
+            "_id": "$emp_code",
+            "total_late_minutes": {"$sum": "$late_minutes"},
+            "late_count": {"$sum": {"$cond": [{"$gt": ["$late_minutes", 0]}, 1, 0]}},
+        }},
         {"$match": {"total_late_minutes": {"$gt": 0}}},
         {"$lookup": {
             "from": "employees",
@@ -721,15 +725,15 @@ def late_leaderboard(
         pipeline.append({"$match": {"department": department}})
 
     pipeline += [
-        # $denseRank: ties share a rank, next rank is skipped — standard competition ranking
+        # $rank: tied employees share a rank and the next rank is skipped (1, 2, 2, 4) — spec's exact example
         {"$setWindowFields": {
             "sortBy": {"total_late_minutes": DESCENDING, "emp_code": ASCENDING},
-            "output": {"rank": {"$denseRank": {}}},
+            "output": {"rank": {"$rank": {}}},
         }},
-        # Return every row whose rank <= limit (ties at the cutoff boundary are included)
+        # Return every row whose rank <= limit (ties at the cutoff boundary are all included)
         {"$match": {"rank": {"$lte": limit}}},
         {"$sort": {"total_late_minutes": DESCENDING, "emp_code": ASCENDING}},
-        {"$project": {"_id": 0, "emp_code": 1, "name": 1, "department": 1, "total_late_minutes": 1, "rank": 1}},
+        {"$project": {"_id": 0, "emp_code": 1, "name": 1, "department": 1, "total_late_minutes": 1, "late_count": 1, "rank": 1}},
     ]
 
     return {"month": month, "limit": limit, "items": list(db.attendance_logs.aggregate(pipeline))}
