@@ -59,15 +59,11 @@ PRESENCE_STATUSES = {"PRESENT", "WFH", "ON_DUTY"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Unique index on emp_code prevents duplicate employees and is the lookup key
     db.employees.create_index("emp_code", unique=True)
-    # Unique compound index enforces one record per (employee, day) AND makes punch-in atomic
+    # Unique compound index makes each (employee, day) pair atomic — no check-then-insert race on punch-in
     db.attendance_logs.create_index([("emp_code", ASCENDING), ("date", ASCENDING)], unique=True)
-    # Supports list_attendance sort (date desc, emp_code asc) and date-range filters
     db.attendance_logs.create_index([("date", DESCENDING), ("emp_code", ASCENDING)])
-    # Supports analytics aggregations that filter by date range only
     db.attendance_logs.create_index("date")
-    # Supports department summary and trend queries (filter by dept, range on joined_on)
     db.employees.create_index([("department", ASCENDING), ("joined_on", ASCENDING)])
     yield
 
@@ -436,7 +432,6 @@ def regularize_attendance(
     if new_status in PRESENCE_STATUSES and not body.punch_in and not record.get("punch_in"):
         raise HTTPException(422, detail="presence status requires a punch_in")
 
-    # Build the set of fields that will change
     update: dict = {}
 
     if body.status and body.status.value != record["status"]:
@@ -485,7 +480,6 @@ def regularize_attendance(
             update["overtime_minutes"] = compute_overtime_minutes(po, emp["shift_end"], emp["shift_start"], date)
             update["half_day"] = wh < 4.50
 
-    # Compute the diff between the old record and the final state
     changes = {}
     for field in ("status", "punch_in", "punch_out", "work_hours", "late_minutes", "overtime_minutes", "half_day"):
         old_val = record.get(field)
@@ -789,7 +783,6 @@ def department_trend(
             }},
             "late_count": {"$sum": {"$cond": [{"$gt": [{"$ifNull": ["$late_minutes", 0]}, 0]}, 1, 0]}},
         }},
-        # Fill in every missing calendar day with zero counts
         {"$densify": {"field": "_id", "range": {"step": 1, "unit": "day", "bounds": [from_dt, to_dt + timedelta(days=1)]}}},
         {"$fill": {"output": {"present_count": {"value": 0}, "late_count": {"value": 0}}}},
         {"$addFields": {
